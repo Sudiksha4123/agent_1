@@ -37,6 +37,7 @@ class TopicScore(BaseModel):
     topic: str
     score: int
     total: int
+    topic_understanding_score: int
     feedback: str
 
 class EvaluationResponse(BaseModel):
@@ -50,14 +51,14 @@ class TopicPerformance(BaseModel):
     topic: str
     average_score: float
     quizzes_attempted: int
+    understanding_score: int  
+
 
 class ProfileResponse(BaseModel):
     user_id: str
     total_quizzes: int
     overall_average: float
     topic_performance: List[TopicPerformance]
-    strong_topics: List[str]
-    weak_topics: List[str]
     last_quiz_score: Optional[float] = None
 
 # To generate plan
@@ -68,19 +69,11 @@ class TopicPlan(BaseModel):
 
 class PlanResponse(BaseModel):
     user_id: str
-    
-    # Timeline
     start_date: date
     end_date: date
     total_duration_days: int
     total_days_left: int
-
-    # Plan configuration
     generated_for_topics: List[str]
     recommended_difficulty: Literal["easy", "medium", "hard"]
-
-    # Study breakdown
     study_plan: List[TopicPlan]
-
-    # Optional tracking
-    daily_time_commitment_minutes: Optional[int] = None
+    daily_time_commitment: Optional[int] = None

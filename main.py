@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from assess_agent import generate_quiz, generate_eval
-from schema import Quiz, QuizSubmission, QuizEvaluationRequest, EvaluationResponse
+from build_profile import update_profile, generate_profile
+from schema import Quiz, QuizSubmission, QuizEvaluationRequest, EvaluationResponse, ProfileResponse
 import random
 
 app=FastAPI()
@@ -24,6 +25,11 @@ def evaluate_quiz(request: QuizEvaluationRequest):
 
     return evaluation
 
+@app.post("/update-profile", response_model=ProfileResponse)
+def update_profile_endpoint(user_id: str, evaluation: EvaluationResponse):
 
+    update_profile(user_id, evaluation)
 
-   
+    profile = generate_profile(user_id)
+
+    return profile

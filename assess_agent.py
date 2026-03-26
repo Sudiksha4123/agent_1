@@ -52,6 +52,10 @@ Return STRICT JSON matching this format:
     }}
   ]
 }}
+
+Both MCQs and the Subjective questions MUST be present.
+Do not omit any fields.
+Do not return text outside JSON.
 """
 
     completion = client.chat.completions.create(
@@ -59,18 +63,20 @@ Return STRICT JSON matching this format:
     temperature=0.3,
     max_tokens=2000,
     messages=[{"role": "user", "content": prompt}],
-    response_format={
-        "type": "json_schema",
-        "json_schema": {
-            "name": "quiz_schema",
-            "schema": Quiz.model_json_schema()
-        }
-    },
+    # response_format={
+    #     "type": "json_schema",
+    #     "json_schema": {
+    #         "name": "quiz_schema",
+    #         "schema": Quiz.model_json_schema()
+    #     }
+    # },
 )
 
     content = completion.choices[0].message.content
     
-    # print(content)
+    print("\n===== LLM RESPONSE =====")
+    print(content)
+    print("========================\n")
     
     #Prints json
     quiz_dict = json.loads(content)
@@ -80,42 +86,47 @@ Return STRICT JSON matching this format:
     return quiz
 
 def generate_eval(quiz: dict, user_sub: dict) -> EvaluationResponse:
+
     prompt = f"""
-    You are an expert evaluator.
+You are an expert evaluator.
 
-    Given the quiz and user answers below:
-    
-    QUIZ:
-    {json.dumps(quiz, indent=2)}
+Given the quiz and user answers below:
 
-    USER ANSWERS:
-    {json.dumps(user_sub, indent=2)}
+QUIZ:
+{json.dumps(quiz, indent=2)}
 
-    Instructions:
-    - Evaluate answers topic-wise.
-    - Calculate score and total per topic.
-    - Calculate overall score and total.
-    - Provide constructive feedback per topic.
-    - Provide final overall feedback.
-    - Return ONLY valid JSON.
-    - Do not include markdown.
-    - Do not include explanation outside JSON.
+USER ANSWERS:
+{json.dumps(user_sub, indent=2)}
 
-    Required only valid JSON in this format:
+Instructions:
+- Evaluate answers topic-wise.
+- Calculate score and total per topic.
+- Assign a topic understanding score from 0 to 100 based on conceptual understanding.
+- The understanding score should consider correctness and depth of explanation.
+- Calculate overall score and total.
+- Provide constructive feedback per topic.
+- Provide final overall feedback.
+
+Return ONLY valid JSON.
+
+Required JSON format:
+
+{{
+  "topic_scores": [
     {{
-      "topic_scores": [
-        {{
-          "topic": "string",
-          "score": int,
-          "total": int,
-          "feedback": "string"
-        }}
-      ],
-      "overall_score": int,
-      "overall_total": int,
-      "final_feedback": "string"
+      "topic": "string",
+      "score": 0,
+      "total": 0,
+      "topic_understanding_score": 0,
+      "feedback": "string"
     }}
-    """
+  ],
+  "overall_score": 0,
+  "overall_total": 0,
+  "final_feedback": "string"
+}}
+"""
+  
 
     completion = client.chat.completions.create(
     model="openai/gpt-oss-20b:groq",
