@@ -1,72 +1,54 @@
 from schema import TopicPerformance, ProfileResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from models import Profile, Evaluation, TopicScoreDB
 
-profiles = {}
-
-def update_profile(user_id: str, evaluation):
-    if user_id not in profiles:
-     profiles[user_id] = {
-        "total_quizzes": 0,
-        "scores": [],
-        "topics": {}
-    }
+def update_profile(user_id: int, new_score: float, db: Session):
+    profile = db.query(Profile).filter_by(user_id=user_id).first()
     
-    profile = profiles[user_id]
+    if not profile:
+        raise ValueError(f"Profile not found for user_id={user_id}")
 
-    percentage = (evaluation.overall_score / evaluation.overall_total) * 100
+    total = profile.total_quiz + 1
 
-    profile["total_quizzes"] += 1
-    profile["scores"].append(percentage)
+    new_avg = (
+        (profile.overall_avg * profile.total_quiz) + new_score
+    ) / total
 
-    for topic_data in evaluation.topic_scores:
+    profile.total_quiz = total
+    profile.overall_avg = new_avg
 
-        topic = topic_data.topic
-        score = topic_data.score
-        total = topic_data.total
-        understanding = topic_data.topic_understanding_score
-
-        topic_percentage = (score / total) * 100
-
-        if topic not in profile["topics"]:
-            profile["topics"][topic] = {
-                "scores": [],
-                "quizzes_attempted": 0,
-                "understanding_score": understanding
-            }
-
-        data = profile["topics"][topic]
-
-        data["scores"].append(topic_percentage)
-        data["quizzes_attempted"] += 1
-        data["understanding_score"] = understanding
+    db.commit()
+    db.refresh(profile)
 
     return profile
 
+def generate_profile(user_id: int, db: Session):
+    evaluations = db.query(Evaluation).filter_by(user_id=user_id).all()
 
-def generate_profile(user_id: str):
-
-    profile = profiles[user_id]
+    topic_map = {}
+# needs to be optimized. 
+    for eval in evaluations:
+        for ts in eval.topic_scores:
+            if ts.topic not in topic_map:
+                topic_map[ts.topic] = {
+                    "total_score": 0,
+                    "count": 0,
+                    "understanding": 0
+                }
+# all three are not computed properly
+            topic_map[ts.topic]["total_score"] += ts.score
+            topic_map[ts.topic]["count"] += 1
+            topic_map[ts.topic]["understanding"] += ts.understanding_score
 
     topic_performance = []
 
-    for topic, data in profile["topics"].items():
+    for topic, data in topic_map.items():
+        topic_performance.append({
+            "topic": topic,
+            "average_score": data["total_score"] / data["count"],
+            "quizzes_attempted": data["count"],
+            "understanding_score": data["understanding"] // data["count"]
+        })
 
-        avg_score = sum(data["scores"]) / len(data["scores"])
-
-        topic_performance.append(
-            TopicPerformance(
-                topic=topic,
-                average_score=avg_score,
-                quizzes_attempted=data["quizzes_attempted"],
-                understanding_score=data["understanding_score"]
-            )
-        )
-
-    overall_avg = sum(profile["scores"]) / len(profile["scores"])
-
-    return ProfileResponse(
-        user_id=user_id,
-        total_quizzes=profile["total_quizzes"],
-        overall_average=overall_avg,
-        topic_performance=topic_performance,
-        last_quiz_score=profile["scores"][-1]
-    )
+    return topic_performance

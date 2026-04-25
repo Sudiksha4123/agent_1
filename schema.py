@@ -59,7 +59,6 @@ class ProfileResponse(BaseModel):
     total_quizzes: int
     overall_average: float
     topic_performance: List[TopicPerformance]
-    last_quiz_score: Optional[float] = None
 
 # To generate plan
 class TopicPlan(BaseModel):
