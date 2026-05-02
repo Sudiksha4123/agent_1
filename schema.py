@@ -2,35 +2,76 @@ from pydantic import BaseModel
 from typing import List, Literal, Optional
 from datetime import date
 
+
+#===============
+# To request quiz generation
+class QuizRequest(BaseModel):
+    user_id: int
+    course_id: int
+# ===============
 # To generate quiz
-class MCQ(BaseModel):
+class MCQInternal(BaseModel):
+    # question_id: Optional[int] = None
     question: str
     options: List[str]
     correct_answer: str
-    explanation: str
+    explanation: Optional[str] = None
 
-class SubjectiveQuestion(BaseModel):
+
+class SubjectiveInternal(BaseModel):
+    # question_id: Optional[int] = None
     question: str
     evaluation_points: List[str]
 
-class Quiz(BaseModel):
-    topic: str
+
+class QuizInternal(BaseModel):
+    topics: List[str]
+    difficulty: Literal["Easy", "Medium", "Hard"]
+    mcqs: List[MCQInternal]
+    subjective: List[SubjectiveInternal]
+# =================
+# For API responses
+class MCQ(BaseModel):
+    question_id: int
+    question: str
+    options: List[str]
+
+
+class SubjectiveQuestion(BaseModel):
+    question_id: int
+    question: str
+
+
+class QuizSet(BaseModel):
+    quiz_id: int
+    topics: List[str]
     difficulty: Literal["Easy", "Medium", "Hard"]
     mcqs: List[MCQ]
     subjective: List[SubjectiveQuestion]
-
+# ===============================
 # Submitted answers
-class UserAnswer(BaseModel):
-    question: str
-    selected_answer: str
+
+class MCQAnswer(BaseModel):
+    question_id: int
+    selected_option: str
+
+
+class SubjectiveAnswer(BaseModel):
+    question_id: int
+    answer_text: str
+
 
 class QuizSubmission(BaseModel):
-    answers: List[UserAnswer] 
-
-# until there is no database
-class QuizEvaluationRequest(BaseModel):
-    quiz: Quiz
-    submission: QuizSubmission
+    user_id: int
+    course_id: int
+    quiz_id: int
+    mcq_answers: List[MCQAnswer]
+    subjective_answers: List[SubjectiveAnswer]
+# ===========================================
+# # until there is no database
+# class QuizEvaluationRequest(BaseModel):
+#     quiz: QuizSet
+#     submission: QuizSubmission
     
 #For Evaluation
 class TopicScore(BaseModel):
@@ -51,11 +92,11 @@ class TopicPerformance(BaseModel):
     topic: str
     average_score: float
     quizzes_attempted: int
-    understanding_score: int  
+    understanding_score: float  
 
 
 class ProfileResponse(BaseModel):
-    user_id: str
+    user_id: int
     total_quizzes: int
     overall_average: float
     topic_performance: List[TopicPerformance]
@@ -66,13 +107,12 @@ class TopicPlan(BaseModel):
     focus_areas: List[str]
     study_tips: str
 
+
+
 class PlanResponse(BaseModel):
-    user_id: str
     start_date: date
     end_date: date
-    total_duration_days: int
-    total_days_left: int
-    generated_for_topics: List[str]
+    topics: List[str]
     recommended_difficulty: Literal["easy", "medium", "hard"]
     study_plan: List[TopicPlan]
     daily_time_commitment: Optional[int] = None
