@@ -7,7 +7,7 @@ class User(Base):
     __tablename__ = "users"
 
     user_id = Column(Integer, primary_key=True)
-    name = Column(String)
+    username = Column(String, unique=True, nullable=False)
     email = Column(String, unique=True)
     password = Column(String)
     created_at = Column(DateTime, default=func.now())

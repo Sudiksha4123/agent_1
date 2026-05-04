@@ -5,7 +5,9 @@ from schema import QuizInternal, EvaluationResponse
 from models import Plan
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
+import time
 import os
+import re
 
 load_dotenv()
 
@@ -13,8 +15,21 @@ client = OpenAI(
     base_url="https://router.huggingface.co/v1",
     api_key=os.environ["HF_TOKEN"],
     timeout=30.0,
-    max_retries=3
+    max_retries=2
 )
+
+MAX_RETRIES = 3
+
+def extract_json(content: str) -> dict:
+    content = content.strip()
+    match = re.search(r'```(?:json)?\s*([\s\S]*?)```', content)
+    if match:
+        content = match.group(1).strip()
+    start = content.find('{')
+    end = content.rfind('}')
+    if start != -1 and end != -1:
+        content = content[start:end+1]
+    return json.loads(content)
 
 def get_latest_plan(user_id: int, course_id: int, db: Session) -> Plan:
     plan = (db.query(Plan).filter(Plan.user_id == user_id, Plan.course_id == course_id).order_by(Plan.created_at.desc()).first())
@@ -49,8 +64,8 @@ Rules:
 Return STRICT JSON matching this format:
 
 {{
-  "topics": [],
-  "difficulty": "",
+  "topics": {json.dumps(topics)},
+  "difficulty": "{difficulty}" ,
   "mcqs": [
     {{
       "question": "",
@@ -72,39 +87,56 @@ Do not omit any fields.
 Do NOT include explanations, comments, or extra text.
 """
 
-    completion = client.chat.completions.create(
-    model=os.environ["MODEL_NAME"],
-    temperature=0.3,
-    max_tokens=2000,
-    messages=[{"role": "user", "content": prompt}],
-    response_format={
-        "type": "json_schema",
-        "json_schema": {
-            "name": "quiz_schema",
-            "schema": QuizInternal.model_json_schema()
-        }
-    },
-)
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"Quiz generation attempt {attempt}/{MAX_RETRIES}")
+            completion = client.chat.completions.create(
+                model=os.environ["MODEL_NAME"],
+                temperature=max(0.1, 0.3 - (attempt - 1) * 0.1),  # lower temp on retry
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-    content = completion.choices[0].message.content
-    if isinstance(content, list):
-        content = content[0].get("text", "")
+            content = completion.choices[0].message.content
+            if isinstance(content, list):
+                content = content[0].get("text", "")
+            content = (content or "").strip()
 
-    content = (content or "").strip()
-    
-    print("\n===== LLM RESPONSE =====")
-    print(content)
-    print("========================\n")
-    
-    #Prints json
-    try:
-        quiz_dict = json.loads(content)
-        quiz = QuizInternal.model_validate(quiz_dict)
-        return quiz
-    except json.JSONDecodeError:
-        raise ValueError("LLM did not return valid JSON")
-    except ValidationError as e:
-        raise ValueError(f"Invalid quiz structure: {e}")
+            print(f"\n===== QUIZ LLM RESPONSE (attempt {attempt}) =====")
+            print(content[:500])
+            print("=================================================\n")
+
+            quiz_dict = extract_json(content)
+
+            # fix difficulty casing
+            diff = quiz_dict.get("difficulty", difficulty)
+            if isinstance(diff, str):
+                diff_map = {"easy": "Easy", "medium": "Medium", "hard": "Hard"}
+                quiz_dict["difficulty"] = diff_map.get(diff.lower(), difficulty.capitalize())
+
+            # ensure topics is set
+            if not quiz_dict.get("topics"):
+                quiz_dict["topics"] = topics
+
+            quiz = QuizInternal.model_validate(quiz_dict)
+
+            # sanity checks
+            if not quiz.mcqs:
+                raise ValueError("No MCQs in response")
+            if not quiz.subjective:
+                raise ValueError("No subjective questions in response")
+
+            return quiz
+
+        except (json.JSONDecodeError, ValidationError, ValueError) as e:
+            last_error = e
+            print(f"Attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(2 ** attempt)  # 2s, 4s backoff
+            continue
+
+    raise ValueError(f"Quiz generation failed after {MAX_RETRIES} attempts: {last_error}")
 
 def generate_eval(quiz: dict, mcq_answers, subjective_answers) -> EvaluationResponse:
 
@@ -136,8 +168,13 @@ Then:
 - Group questions by assigned topic
 - Evaluate answers topic-wise
 - Calculate score and total per topic
-- Assign understanding_score (0–100) per topic
-- The understanding score should consider correctness and depth of explanation.
+- Score CANNOT BE a decimal.
+- topic_understanding_score reflects DEPTH of understanding, not just correctness
+- If only 1 question was answered for a topic, cap topic_understanding_score at 60 max
+- A score of 100 means the student answered multiple questions perfectly with detailed explanations
+- A score of 70-85 means mostly correct with minor gaps
+- A score of 50-69 means partially correct
+- A score below 50 means poor understanding
 - Provide feedback per topic and overall
 - Calculate overall score and total.
 - Provide constructive feedback per topic.
@@ -164,32 +201,39 @@ Required JSON format:
 """
   
 
-    completion = client.chat.completions.create(
-    model=os.environ["MODEL_NAME"],
-    temperature=0.5,
-    messages=[{"role": "user", "content": prompt}],
-    response_format={
-        "type": "json_schema",
-        "json_schema": {
-            "name": "evaluation_schema",
-            "schema": EvaluationResponse.model_json_schema()
-        }
-    },
-)
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"Evaluation attempt {attempt}/{MAX_RETRIES}")
+            completion = client.chat.completions.create(
+                model=os.environ["MODEL_NAME"],
+                temperature=max(0.1, 0.5 - (attempt - 1) * 0.1),
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-    content = completion.choices[0].message.content
-    if isinstance(content, list):
-        content = content[0].get("text", "")  
+            content = completion.choices[0].message.content
+            if isinstance(content, list):
+                content = content[0].get("text", "")
+            content = (content or "").strip()
 
-    content = (content or "").strip()
+            print(f"\n===== EVAL LLM RESPONSE (attempt {attempt}) =====")
+            print(content[:500])
+            print("=================================================\n")
 
-    try:
-        evaluation_dict = json.loads(content)
-        evaluation = EvaluationResponse.model_validate(evaluation_dict)
-        return evaluation
+            evaluation_dict = extract_json(content)
+            evaluation = EvaluationResponse.model_validate(evaluation_dict)
 
-    except json.JSONDecodeError:
-        raise ValueError("LLM did not return valid JSON")
+            if not evaluation.topic_scores:
+                raise ValueError("No topic scores in response")
 
-    except ValidationError as e:
-        raise ValueError(f"Invalid evaluation structure: {e}")
+            return evaluation
+
+        except (json.JSONDecodeError, ValidationError, ValueError) as e:
+            last_error = e
+            print(f"Attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(2 ** attempt)
+            continue
+
+    raise ValueError(f"Evaluation failed after {MAX_RETRIES} attempts: {last_error}")

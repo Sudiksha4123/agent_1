@@ -2,11 +2,21 @@ from pydantic import BaseModel
 from typing import List, Literal, Optional
 from datetime import date
 
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    password: str
 
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
 #===============
 # To request quiz generation
 class QuizRequest(BaseModel):
-    user_id: int
     course_id: int
 # ===============
 # To generate quiz
@@ -62,7 +72,6 @@ class SubjectiveAnswer(BaseModel):
 
 
 class QuizSubmission(BaseModel):
-    user_id: int
     course_id: int
     quiz_id: int
     mcq_answers: List[MCQAnswer]
@@ -113,6 +122,6 @@ class PlanResponse(BaseModel):
     start_date: date
     end_date: date
     topics: List[str]
-    recommended_difficulty: Literal["easy", "medium", "hard"]
+    recommended_difficulty: Literal["Easy", "Medium", "Hard"]
     study_plan: List[TopicPlan]
     daily_time_commitment: Optional[int] = None
