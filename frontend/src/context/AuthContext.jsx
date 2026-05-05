@@ -10,8 +10,20 @@ export function AuthProvider({ children }) {
 
   const login = (userData, token) => {
     localStorage.setItem('token', token)
-    localStorage.setItem('user', JSON.stringify(userData))
-    setUser(userData)
+  
+    // decode JWT payload to get username
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]))
+      const enrichedUser = {
+        ...userData,
+        username: payload.username || userData.email
+      }
+      localStorage.setItem('user', JSON.stringify(enrichedUser))
+      setUser(enrichedUser)
+    } catch {
+      localStorage.setItem('user', JSON.stringify(userData))
+      setUser(userData)
+    }
   }
 
   const logout = () => {

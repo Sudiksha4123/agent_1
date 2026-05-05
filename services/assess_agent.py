@@ -32,11 +32,16 @@ def extract_json(content: str) -> dict:
     return json.loads(content)
 
 def get_latest_plan(user_id: int, course_id: int, db: Session) -> Plan:
-    plan = (db.query(Plan).filter(Plan.user_id == user_id, Plan.course_id == course_id).order_by(Plan.created_at.desc()).first())
-
+    plan = (db.query(Plan)
+            .filter(
+                Plan.user_id == user_id,
+                Plan.course_id == course_id,
+                Plan.is_initial == False  # never quiz from the course map
+            )
+            .order_by(Plan.created_at.desc())
+            .first())
     if not plan:
-        raise ValueError("No plan found for this course")
-
+        raise ValueError("No sprint plan found. Complete your first study session first.")
     return plan
 
 def generate_quiz(topics: list[str], difficulty: str):
@@ -167,15 +172,21 @@ Task:
 Then:
 - Group questions by assigned topic
 - Evaluate answers topic-wise
-- Calculate score and total per topic
-- Score CANNOT BE a decimal.
-- topic_understanding_score reflects DEPTH of understanding, not just correctness
-- If only 1 question was answered for a topic, cap topic_understanding_score at 60 max
-- A score of 100 means the student answered multiple questions perfectly with detailed explanations
-- A score of 70-85 means mostly correct with minor gaps
-- A score of 50-69 means partially correct
-- A score below 50 means poor understanding
-- Provide feedback per topic and overall
+- Calculate score and total per topic:
+   - MCQ: 1 if correct, 0 if wrong
+   - Subjective: score between 0.0 and 2.0 based on how well evaluation_points are addressed
+     - 2.0 = all points addressed clearly
+     - 1.0 = partial understanding, some points addressed
+     - 0.5 = minimal understanding
+     - 0.0 = completely wrong or blank
+   - score and total CAN be decimals
+- topic_understanding_score (integer 0-100) reflects DEPTH of understanding:
+   - Only 1 question for this topic → cap at 60 maximum
+   - Multiple questions answered perfectly with detailed explanations → 85-100
+   - Mostly correct with minor gaps → 70-85
+   - Partially correct → 50-69
+   - Poor understanding → below 50
+   - Blank or completely wrong → below 20
 - Calculate overall score and total.
 - Provide constructive feedback per topic.
 - Provide final overall feedback.

@@ -12,19 +12,27 @@ from database import SessionLocal  # import your session factory
 def generate_plan_background(user_id: int, course_id: int):
     db = SessionLocal()
     try:
+        # get the course map (initial plan)
+        initial_plan = db.query(Plan).filter(
+            Plan.user_id == user_id,
+            Plan.course_id == course_id,
+            Plan.is_initial == True
+        ).first()
+
+        initial_topics = initial_plan.topics if initial_plan else None
+
+        # update profile with latest quiz performance
         update_profile(user_id, course_id, db)
         print("Profile updated!!")
 
-        context = fetch_profile(user_id, course_id, db)
+        # get performance context
+        try:
+            context = fetch_profile(user_id, course_id, db)
+        except ValueError:
+            # no profile yet — first sprint, no performance data
+            context = {"topics": [], "overall_average": 0, "total_quizzes": 0}
+
         course_time = get_course_time(user_id, course_id, db)
-
-        # fetch the very first plan's topics as the master topic list
-        first_plan = db.query(Plan).filter(
-            Plan.user_id == user_id,
-            Plan.course_id == course_id
-        ).order_by(Plan.created_at.asc()).first()
-
-        initial_topics = first_plan.topics if first_plan else None
 
         plan = generate_plan(context, course_time, initial_topics)
         if not plan:
@@ -34,6 +42,7 @@ def generate_plan_background(user_id: int, course_id: int):
         db.add(Plan(
             user_id=user_id,
             course_id=course_id,
+            is_initial=False,
             start_date=plan.start_date,
             end_date=plan.end_date,
             topics=plan.topics,
@@ -41,7 +50,7 @@ def generate_plan_background(user_id: int, course_id: int):
             study_plan=[tp.model_dump() for tp in plan.study_plan]
         ))
         db.commit()
-        print("Plan stored successfully!!")
+        print("Sprint plan stored!!")
 
     except Exception as e:
         print(f"Background plan generation failed (non-critical): {e}")
@@ -53,7 +62,7 @@ def generate_plan_background(user_id: int, course_id: int):
 def run_quiz_pipeline(request: QuizSubmission, db: Session, current_user):
     user_id = current_user.user_id
 
-    # 1. Fetch quiz
+    
     db_quiz = db.query(Quiz).filter(Quiz.quiz_id == request.quiz_id).first()
     if not db_quiz:
         raise ValueError("Quiz not found")
@@ -64,7 +73,7 @@ def run_quiz_pipeline(request: QuizSubmission, db: Session, current_user):
         "subjective": json.loads(db_quiz.subjective)
     }
 
-    # 2. Store response
+    
     response = Response(
         user_id=user_id,
         quiz_id=request.quiz_id,
@@ -77,7 +86,11 @@ def run_quiz_pipeline(request: QuizSubmission, db: Session, current_user):
     db.flush()
     print("Response stored!!")
 
-    # 3. Generate evaluation
+    db_quiz.is_attempted=True
+    db.add(db_quiz)
+    db.flush()
+
+    
     try:
         evaluation_result = generate_eval(
             quiz=quiz_data,
@@ -89,7 +102,7 @@ def run_quiz_pipeline(request: QuizSubmission, db: Session, current_user):
         db.rollback()
         raise ValueError(f"Evaluation failed: {e}")
 
-    # 4. Store evaluation
+    
     evaluation = Evaluation(
         response_id=response.response_id,
         user_id=user_id,
@@ -100,7 +113,6 @@ def run_quiz_pipeline(request: QuizSubmission, db: Session, current_user):
     db.add(evaluation)
     db.flush()
 
-    # 5. Store topic scores
     for ts in evaluation_result.topic_scores:
         db.add(TopicScoreDB(
             evaluation_id=evaluation.evaluation_id,
@@ -114,7 +126,7 @@ def run_quiz_pipeline(request: QuizSubmission, db: Session, current_user):
     db.commit()
     print("Evaluation stored!!")
 
-    # 6. Fire background plan generation with its own session
+    # fire background plan generation 
     thread = threading.Thread(
         target=generate_plan_background,
         args=(user_id, request.course_id),
@@ -122,7 +134,6 @@ def run_quiz_pipeline(request: QuizSubmission, db: Session, current_user):
     )
     thread.start()
 
-    # 7. Return immediately
     return {
         "topic_scores": [
             {

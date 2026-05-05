@@ -62,6 +62,7 @@ class Plan(Base):
     topics = Column(JSON)
     recommended_difficulty = Column(String)
     study_plan = Column(JSON)
+    is_initial = Column(Boolean, default=False)
     created_at = Column(DateTime, default=func.now())
 
     user = relationship("User", back_populates="plans")
@@ -146,6 +147,7 @@ class Profile(Base):
 
     total_quiz = Column(Integer, default=0)
     overall_avg = Column(Float, default=0.0)
+    overall_max = Column(Float, default=0.0)
 
     user = relationship("User", back_populates="profile")
     course = relationship("Course", back_populates="profile")

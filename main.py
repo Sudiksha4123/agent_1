@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from services.assess_agent import get_latest_plan, generate_quiz, generate_eval
 from services.workflow import run_quiz_pipeline
+from services.planner_agent import generate_initial_plan
 from schema import QuizRequest, QuizSet, MCQ, SubjectiveQuestion, QuizSubmission, EvaluationResponse, ProfileResponse, TopicPerformance, PlanResponse
 from models import User, Course, Syllabus, Evaluation, TopicScoreDB, Quiz, Plan, Profile
 from auth.dependencies import get_current_user
@@ -27,7 +28,8 @@ app.include_router(auth_router, include_in_schema=True)
 def home():
     return {"message": "Quiz AI backend running"}
 
-
+# =======================
+# courses
 @app.get("/courses")
 def get_courses(
     db: Session = Depends(get_db),
@@ -58,8 +60,8 @@ def create_course(
         end_date=datetime.fromisoformat(course["end_date"]) if course.get("end_date") else None,
     )
     db.add(new_course)
-    db.commit()
-    db.refresh(new_course)
+    db.flush()
+    
 
     new_profile = Profile(
         user_id=current_user.user_id,
@@ -68,7 +70,7 @@ def create_course(
 
     db.add(new_profile)
     db.commit()
-    db.refresh(new_profile)
+    db.refresh(new_course)
     
     return {
         "course_id": new_course.course_id,
@@ -77,13 +79,14 @@ def create_course(
         "end_date": new_course.end_date
     }
 
+# =================
+# use syllabus to generate initial plan
 @app.post("/syllabus")
 def create_syllabus(
     data: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from services.planner_agent import generate_initial_plan
 
     # 1. Save syllabus
     new_syllabus = Syllabus(
@@ -121,7 +124,8 @@ def create_syllabus(
             end_date=plan.end_date,
             topics=plan.topics,
             recommended_difficulty=plan.recommended_difficulty,
-            study_plan=[tp.model_dump() for tp in plan.study_plan]
+            study_plan=[tp.model_dump() for tp in plan.study_plan],
+            is_initial=True
         ))
     except Exception as e:
         print(f"Plan generation failed: {e}")
@@ -134,6 +138,8 @@ def create_syllabus(
         "syllabus_id": new_syllabus.syllabus_id
     }
 
+# =====================
+# skip entering syllabus
 @app.post("/courses/{course_id}/generate-plan")
 def generate_plan_without_syllabus(
     course_id: int,
@@ -166,13 +172,66 @@ def generate_plan_without_syllabus(
             end_date=plan.end_date,
             topics=plan.topics,
             recommended_difficulty=plan.recommended_difficulty,
-            study_plan=[tp.model_dump() for tp in plan.study_plan]
+            study_plan=[tp.model_dump() for tp in plan.study_plan],
+            is_initial=True
         )
         db.add(db_plan)
         db.commit()
         return {"message": "Plan generated successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {str(e)}")
+
+# ======================
+# to generate sprint plans
+@app.post("/courses/{course_id}/start-learning")
+def start_learning(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from services.planner_agent import generate_plan, get_course_time
+
+    # check sprint doesn't already exist
+    existing_sprint = db.query(Plan).filter(
+        Plan.user_id == current_user.user_id,
+        Plan.course_id == course_id,
+        Plan.is_initial == False
+    ).first()
+
+    if existing_sprint:
+        return {"message": "Sprint already exists"}
+
+    # get initial plan (course map) for context
+    initial_plan = db.query(Plan).filter(
+        Plan.user_id == current_user.user_id,
+        Plan.course_id == course_id,
+        Plan.is_initial == True
+    ).first()
+
+    if not initial_plan:
+        raise HTTPException(status_code=404, detail="No course plan found. Please set up your course first.")
+
+    try:
+        context = {"topics": [], "overall_average": 0, "total_quizzes": 0}
+        course_time = get_course_time(current_user.user_id, course_id, db)
+        plan = generate_plan(context, course_time, initial_plan.topics)
+
+        db.add(Plan(
+            user_id=current_user.user_id,
+            course_id=course_id,
+            is_initial=False,
+            start_date=plan.start_date,
+            end_date=plan.end_date,
+            topics=plan.topics,
+            recommended_difficulty=plan.recommended_difficulty,
+            study_plan=[tp.model_dump() for tp in plan.study_plan]
+        ))
+        db.commit()
+        return {"message": "Sprint generated successfully"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sprint generation failed: {str(e)}")
+    
 
 # ── Profile ───────────────────────────────────────────────
 
@@ -182,37 +241,45 @@ def get_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    from services.build_profile import generate_profile
+
     profile = db.query(Profile).filter(
         Profile.user_id == current_user.user_id,
         Profile.course_id == course_id
     ).first()
 
+    topic_performance = generate_profile(current_user.user_id, course_id, db)
+
     if not profile:
         return {
             "total_quiz": 0,
-            "overall_avg": 0.0
+            "overall_avg": 0.0,
+            "overall_max": profile.overall_max or 0.0,   
+            "topic_performance": topic_performance
         }
 
     return {
         "total_quiz": profile.total_quiz,
-        "overall_avg": profile.overall_avg
+        "overall_avg": profile.overall_avg,
+        "overall_max": profile.overall_max or 0.0,
+        "topic_performance": topic_performance
     }
 
 # ── Plan ──────────────────────────────────────────────────
-
-@app.get("/plan/{course_id}")
-def get_plan(
+@app.get("/plan/{course_id}/initial")
+def get_initial_plan(
     course_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     plan = db.query(Plan).filter(
         Plan.user_id == current_user.user_id,
-        Plan.course_id == course_id
-    ).order_by(Plan.created_at.desc()).first()
+        Plan.course_id == course_id,
+        Plan.is_initial == True
+    ).first()
 
     if not plan:
-        raise HTTPException(status_code=404, detail="No plan found for this course")
+        raise HTTPException(status_code=404, detail="No course map found")
 
     return {
         "plan_id": plan.plan_id,
@@ -223,12 +290,79 @@ def get_plan(
         "end_date": plan.end_date
     }
 
+@app.get("/plan/{course_id}")
+def get_plan(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # first try to get latest sprint plan
+    plan = db.query(Plan).filter(
+        Plan.user_id == current_user.user_id,
+        Plan.course_id == course_id,
+        Plan.is_initial == False
+    ).order_by(Plan.created_at.desc()).first()
+
+    # fall back to initial plan if no sprint exists yet
+    if not plan:
+        plan = db.query(Plan).filter(
+            Plan.user_id == current_user.user_id,
+            Plan.course_id == course_id
+        ).order_by(Plan.created_at.desc()).first()
+
+    if not plan:
+        raise HTTPException(status_code=404, detail="No plan found for this course")
+
+    return {
+        "plan_id": plan.plan_id,
+        "topics": plan.topics,
+        "recommended_difficulty": plan.recommended_difficulty,
+        "study_plan": plan.study_plan,
+        "start_date": plan.start_date,
+        "end_date": plan.end_date,
+        "is_initial": plan.is_initial
+    }
+
+@app.get("/quiz/status/{course_id}")
+def get_quiz_status(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    sprint_plan_exists = db.query(Plan).filter(
+        Plan.user_id == current_user.user_id,
+        Plan.course_id == course_id,
+        Plan.is_initial == False
+    ).first() is not None
+
+    quiz_count = db.query(Quiz).join(Plan).filter(
+        Plan.user_id == current_user.user_id,
+        Plan.course_id == course_id
+    ).count()
+
+    return {
+        "sprint_ready": sprint_plan_exists,
+        "quizzes_taken": quiz_count
+    }
+
 @app.post("/quiz/generate", response_model=QuizSet)
 def generate_quiz_endpoint(
     request: QuizRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # check a sprint plan exists (not just the initial course map)
+    sprint_plan = db.query(Plan).filter(
+        Plan.user_id == current_user.user_id,
+        Plan.course_id == request.course_id,
+        Plan.is_initial == False
+    ).first()
+
+    if not sprint_plan:
+        raise HTTPException(
+            status_code=400,
+            detail="no_sprint_plan"
+        )
 
     try:
         plan = get_latest_plan(current_user.user_id, request.course_id, db)

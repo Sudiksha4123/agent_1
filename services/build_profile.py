@@ -28,6 +28,8 @@ def update_profile(user_id: int, course_id: int, db: Session):
 
     new_score = latest_eval.overall_score
 
+    new_total = latest_eval.overall_total or 0
+
     # 🔹 Incremental update
     total = profile.total_quiz + 1
 
@@ -35,8 +37,16 @@ def update_profile(user_id: int, course_id: int, db: Session):
         (profile.overall_avg * profile.total_quiz) + new_score
     ) / total
 
+    new_total = latest_eval.overall_total or 0
+
+    new_max = (
+        ((profile.overall_max or 0) * profile.total_quiz) + new_total
+    ) / total
+
+
     profile.total_quiz = total
     profile.overall_avg = new_avg
+    profile.overall_max = new_max
 
     db.commit()
     db.refresh(profile)

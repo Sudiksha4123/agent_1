@@ -85,8 +85,8 @@ class QuizSubmission(BaseModel):
 #For Evaluation
 class TopicScore(BaseModel):
     topic: str
-    score: int
-    total: int
+    score: float
+    total: float
     topic_understanding_score: int
     feedback: str
 

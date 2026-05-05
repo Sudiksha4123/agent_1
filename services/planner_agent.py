@@ -73,60 +73,90 @@ def fetch_profile(user_id: int, course_id: int, db: Session):
     }    
 
 def generate_plan(context: dict, course_time=None, initial_topics: list = None) -> PlanResponse:
-    if not context["topics"]:
-        raise ValueError("No topic performance available for planning")
+    if not context["topics"] and not initial_topics:
+        raise ValueError("No topic data available for planning")
 
-    context["topics"].sort(key=lambda x: x["average_score"])
     remaining_days = course_time.get("remaining_days") if course_time else None
+    overall_avg = context.get("overall_average", 0)
 
-    # figure out which topics have been covered vs not yet started
-    assessed_topics = [t["topic"] for t in context["topics"]]
-    pending_topics = []
+    # topics already assessed with performance data
+    assessed_topics = {t["topic"]: t for t in context.get("topics", [])}
+
+    # maintain the original course map order
+    # split into: weak (need revision), done well, not yet started
+    weak_topics = []
+    strong_topics = []
+    not_started = []
+
     if initial_topics:
-        pending_topics = [t for t in initial_topics if t not in assessed_topics]
+        for topic in initial_topics:
+            if topic in assessed_topics:
+                perf = assessed_topics[topic]
+                if perf["average_score"] < 60:
+                    weak_topics.append({
+                        "topic": topic,
+                        "average_score": perf["average_score"]
+                    })
+                else:
+                    strong_topics.append(topic)
+            else:
+                not_started.append(topic)
 
     prompt = f"""
-You are an intelligent academic planner running a progressive study loop.
+You are an academic sprint planner managing a student's progressive learning through a course.
 
-The student is working through a course step by step.
-Each plan you generate is a SHORT TERM sprint — typically 3 to 14 days long.
-Never generate a plan longer than 3 weeks.
+You have a course map (the full list of topics in the correct learning order).
+Your job is to generate the NEXT short study sprint for the student.
 
-Already Assessed Topics (with performance data):
-{json.dumps(context["topics"], indent=2)}
+--- COURSE MAP (topics in order) ---
+{json.dumps(initial_topics, indent=2)}
 
-Pending Topics Not Yet Covered:
-{json.dumps(pending_topics, indent=2)}
+--- STUDENT PERFORMANCE SO FAR ---
+Overall average: {overall_avg}%
+Remaining days in course: {remaining_days if remaining_days is not None else "unknown"}
+Today: {date.today()}
 
-Total remaining days in course: {remaining_days if remaining_days is not None else "unknown"}
-Today's date: {date.today()}
+Weak topics (score below 60%, need revision):
+{json.dumps(weak_topics, indent=2)}
 
-Your job:
-- Pick 1-3 topics maximum for this sprint
-- If a topic has low average_score (below 50): include it for revision
-- If performance is good (above 75% overall): introduce 1 new pending topic
-- Mix at most 1 new topic with 1-2 revision topics per sprint
-- Decide a realistic sprint length — between 3 and 14 days based on how many topics you picked
-- Set start_date to today
-- Set end_date to start_date + sprint duration
+Strong topics (score above 60%, covered well):
+{json.dumps(strong_topics, indent=2)}
 
-Difficulty rules:
-- Overall average below 50%: Easy, focus on revision only
-- Overall average 50-75%: Medium, mix revision + 1 new topic
-- Overall average above 75%: Hard, push new topics
+Topics not yet started (next in course map order):
+{json.dumps(not_started, indent=2)}
+
+--- SPRINT RULES ---
+
+1. ALWAYS respect the course map order — do not skip ahead
+2. Pick the NEXT 1-2 topics that haven't been started yet (in order from course map)
+3. If there are weak topics, include at most 1 for revision alongside the new topic
+4. If ALL not_started topics are done, focus entirely on revision of weak topics
+5. Sprint duration:
+   - 1 topic → 3 to 5 days
+   - 2 topics → 5 to 7 days
+   - 3 topics → 7 to 10 days
+6. Difficulty:
+   - Overall average below 50% → Easy
+   - Overall average 50-75% → Medium  
+   - Overall average above 75% → Hard
+7. NEVER include more than 3 topics in a sprint
+8. NEVER copy the full course map into a sprint
+
+Set start_date to today: {date.today()}
+Set end_date based on sprint duration above.
 
 Return ONLY raw JSON. No markdown. Start with {{ end with }}
 
 {{
   "start_date": "{date.today()}",
   "end_date": "YYYY-MM-DD",
-  "topics": ["topic1", "topic2"],
+  "topics": ["next topic from course map"],
   "recommended_difficulty": "Medium",
   "study_plan": [
     {{
-      "topic": "topic1",
-      "focus_areas": ["area1", "area2"],
-      "study_tips": "tip here"
+      "topic": "topic name",
+      "focus_areas": ["specific area 1", "specific area 2"],
+      "study_tips": "actionable tip"
     }}
   ],
   "daily_time_commitment": 60
@@ -152,11 +182,9 @@ Return ONLY raw JSON. No markdown. Start with {{ end with }}
 
             plan_dict = extract_json(content)
 
-            # fix common field name mistake
             if "generated_for_topics" in plan_dict and "topics" not in plan_dict:
                 plan_dict["topics"] = plan_dict.pop("generated_for_topics")
 
-            # fix difficulty casing
             diff = plan_dict.get("recommended_difficulty", "Medium")
             diff_map = {"easy": "Easy", "medium": "Medium", "hard": "Hard"}
             plan_dict["recommended_difficulty"] = diff_map.get(diff.lower(), "Medium")
@@ -168,6 +196,11 @@ Return ONLY raw JSON. No markdown. Start with {{ end with }}
             if not plan.topics:
                 raise ValueError("No topics in plan")
 
+            # hard enforce max 3 topics
+            if len(plan.topics) > 3:
+                plan.topics = plan.topics[:3]
+                plan.study_plan = plan.study_plan[:3]
+
             return plan
 
         except (json.JSONDecodeError, ValidationError, ValueError) as e:
@@ -177,7 +210,7 @@ Return ONLY raw JSON. No markdown. Start with {{ end with }}
                 time.sleep(2 ** attempt)
             continue
 
-    raise ValueError(f"Plan generation failed after {MAX_RETRIES} attempts: {last_error}")  
+    raise ValueError(f"Plan generation failed after {MAX_RETRIES} attempts: {last_error}")
     
 
 def generate_initial_plan(course_name: str, start_date, end_date, syllabus_text: str = None) -> PlanResponse:

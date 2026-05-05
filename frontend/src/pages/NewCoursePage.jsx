@@ -85,7 +85,7 @@ export default function NewCoursePage() {
 
         {/* Logo */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-white">QuizAI</h1>
+          <h1 className="text-4xl font-bold text-white">PlannerAI</h1>
           <p className="text-gray-400 mt-2">
             {step === 1 ? 'Set up your new course' : 'Add your syllabus'}
           </p>
