@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,9 +15,11 @@ from auth.routes import router as auth_router
 
 app = FastAPI()
 
+origins = os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -235,7 +238,7 @@ def start_learning(
 
 # ── Profile ───────────────────────────────────────────────
 
-@app.get("/profile/{course_id}")
+@app.get("/profile/{course_id}", response_model=ProfileResponse)
 def get_profile(
     course_id: int,
     db: Session = Depends(get_db),

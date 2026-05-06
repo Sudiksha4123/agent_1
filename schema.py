@@ -7,9 +7,6 @@ class UserCreate(BaseModel):
     email: str
     password: str
 
-class UserLogin(BaseModel):
-    email: str
-    password: str
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -105,9 +102,9 @@ class TopicPerformance(BaseModel):
 
 
 class ProfileResponse(BaseModel):
-    user_id: int
-    total_quizzes: int
-    overall_average: float
+    total_quiz: int
+    overall_avg: float
+    overall_max: float
     topic_performance: List[TopicPerformance]
 
 # To generate plan
