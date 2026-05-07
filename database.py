@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.environ["POSTGRES_URL"]
+DATABASE_URL = os.environ["DATABASE_URL"].replace("postgres://", "postgresql://", 1)
 engine = create_engine(DATABASE_URL)
 # conn = engine.connect()
 # print("Connected!")
